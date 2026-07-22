@@ -16798,13 +16798,14 @@ initFrame:SetScript("OnEvent", function(self)
                       bd.bottomRowCount = nil; bd.customBottomRowEnabled = nil
                       bd.topRowSizeOffset = nil; bd.customTopRowSizeEnabled = nil
                       bd.bottomRowSizeOffset = nil; bd.customBottomRowSizeEnabled = nil
-                      if bd.anchorFirstRow then
-                          -- The first-row pin rides on the 2-row custom split
-                          -- (the only layout whose row count changes at
-                          -- runtime). Clear it with the rest of the split
+                      if bd.anchorFirstRow or bd.anchorLastRow then
+                          -- The first/last-row pins ride on the 2-row custom
+                          -- split (the only layout whose row count changes at
+                          -- runtime). Clear them with the rest of the split
                           -- settings and re-store the position in plain edge
                           -- format from the bar's current spot.
                           bd.anchorFirstRow = nil
+                          bd.anchorLastRow = nil
                           if ns.RecaptureBarAnchor then ns.RecaptureBarAnchor(bd.key) end
                       end
                   end
@@ -16869,6 +16870,36 @@ initFrame:SetScript("OnEvent", function(self)
                       get=function() return BD().anchorFirstRow == true end,
                       set=function(v)
                           BD().anchorFirstRow = v or nil
+                          -- Mutually exclusive with Anchor Last Row (the two
+                          -- pins pull the perpendicular axis opposite ways).
+                          if v then BD().anchorLastRow = nil end
+                          -- Recapture the corner from the bar's current spot BEFORE
+                          -- rebuilding, so the new anchor pins where the bar sits now.
+                          if ns.RecaptureBarAnchor then ns.RecaptureBarAnchor(BD().key) end
+                          ns.BuildAllCDMBars(); Refresh(); UpdateCDMPreviewAndResize()
+                      end },
+                    { type="toggle", label="Anchor Last Row",
+                      tooltip="Keeps the last row in place when the second row appears or disappears. Extra rows grow upward.",
+                      -- Mirror of Anchor First Row: pins the trailing
+                      -- perpendicular edge (BOTTOM/RIGHT) instead. Same
+                      -- 2-row-split / not-anchored gating.
+                      disabled=function()
+                          if rowsNotTwo() then return true end
+                          local b = BD()
+                          if b.anchorTo and b.anchorTo ~= "none" then return true end
+                          if EllesmereUI.IsUnlockAnchored and EllesmereUI.IsUnlockAnchored("CDM_" .. b.key) then return true end
+                          return false
+                      end,
+                      disabledTooltip=function()
+                          if rowsNotTwo() then return "This option requires exactly 2 rows" end
+                          return "Not available while this bar is anchored to another element"
+                      end,
+                      rawTooltip=true,
+                      get=function() return BD().anchorLastRow == true end,
+                      set=function(v)
+                          BD().anchorLastRow = v or nil
+                          -- Mutually exclusive with Anchor First Row.
+                          if v then BD().anchorFirstRow = nil end
                           -- Recapture the corner from the bar's current spot BEFORE
                           -- rebuilding, so the new anchor pins where the bar sits now.
                           if ns.RecaptureBarAnchor then ns.RecaptureBarAnchor(BD().key) end

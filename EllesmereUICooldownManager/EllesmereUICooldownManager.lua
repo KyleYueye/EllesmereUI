@@ -3186,12 +3186,22 @@ end
 -- frame's TOPLEFT, so the first row sits at the top (horizontal bars) or the
 -- first column at the left (vertical bars); pinning that edge makes extra rows
 -- grow away from the first row instead of re-centering the whole bar.
+--
+-- anchorLastRow is the mirror pin: the TRAILING edge on the perpendicular axis
+-- is pinned (BOTTOM for horizontal bars, RIGHT for vertical bars). Icons still
+-- lay out from the frame's TOPLEFT; the layout code maps each data row to the
+-- visually reversed row (effRows - 1 - row) so the LAST row hugs the pinned
+-- edge and extra rows grow upward/leftward away from it. The two pins are
+-- mutually exclusive (the options UI enforces it); if both are somehow set,
+-- anchorFirstRow wins in the layout and this resolver's first-row branch runs
+-- first, so behavior stays consistent.
 -- Defined as ns.* fields (not file-scope locals) to stay under Lua 5.1's
 -- 200-local main-chunk ceiling.
 --
--- ignoreFirstRow: resolve the plain growth edge even if the pin is set. Used
--- for unlock-snapped bars, whose saved-edge consumers (ApplyAnchorPosition
--- edge preservation / target follow) only understand single-edge points.
+-- ignoreFirstRow: resolve the plain growth edge even if a row pin (first or
+-- last) is set. Used for unlock-snapped bars, whose saved-edge consumers
+-- (ApplyAnchorPosition edge preservation / target follow) only understand
+-- single-edge points.
 function ns.ResolveGrowAnchorPoint(barData, ignoreFirstRow)
     local grow = (barData and barData.growDirection) or "CENTER"
     local horiz, vert  -- "LEFT"/"RIGHT" and "TOP"/"BOTTOM" components
@@ -3211,6 +3221,15 @@ function ns.ResolveGrowAnchorPoint(barData, ignoreFirstRow)
         else
             -- Horizontal bar: rows stack along the height axis -> pin TOP.
             vert = vert or "TOP"
+        end
+    end
+    if barData and barData.anchorLastRow and not ignoreFirstRow then
+        if barData.verticalOrientation then
+            -- Vertical bar: columns stack leftward from the pin -> pin RIGHT.
+            horiz = horiz or "RIGHT"
+        else
+            -- Horizontal bar: rows stack upward from the pin -> pin BOTTOM.
+            vert = vert or "BOTTOM"
         end
     end
     local pt = (vert or "") .. (horiz or "")
@@ -3274,7 +3293,7 @@ local function ApplyBarPositionCentered(frame, pos, barKey)
     -- Save & Exit.
     local storedIsCorner = (anchor:find("TOP", 1, true) or anchor:find("BOTTOM", 1, true))
         and (anchor:find("LEFT", 1, true) or anchor:find("RIGHT", 1, true))
-    if (bd and bd.anchorFirstRow) or storedIsCorner then
+    if (bd and (bd.anchorFirstRow or bd.anchorLastRow)) or storedIsCorner then
         local cx, cy = ns.AnchorCoordToCenter(anchor, px, py, fw, fh)
         anchor = ns.ResolveGrowAnchorPoint(bd)
         px, py = ns.CenterToAnchorCoord(anchor, cx, cy, fw, fh)
@@ -3303,7 +3322,7 @@ local function ApplyBarPositionCentered(frame, pos, barKey)
     -- coordinate is an EDGE (whole-pixel snap) but the perpendicular
     -- coordinate is the frame's CENTER on that axis -- parity-aware snap so
     -- an odd-pixel dimension keeps whole-pixel edges there too. Corner
-    -- anchors (first-row pin) are edges on BOTH axes.
+    -- anchors (first/last-row pin) are edges on BOTH axes.
     local PPa = EllesmereUI and EllesmereUI.PP
     if PPa then
         local es = frame:GetEffectiveScale()
@@ -4242,6 +4261,14 @@ LayoutCDMBar = function(barKey)
         frame._barBg:Hide()
     end
 
+    -- Last-row pin: reverse the VISUAL row order so the last data row hugs
+    -- the pinned trailing edge (BOTTOM/RIGHT) and extra rows grow away from
+    -- it. Data-row semantics (fill order, per-row centering, row icon
+    -- counts) are untouched -- only the perpendicular-axis offset flips.
+    -- anchorFirstRow wins if both are somehow set (options UI enforces the
+    -- exclusivity). Computed once here, outside the per-icon loops.
+    local lastRowPinned = barData.anchorLastRow and not barData.anchorFirstRow
+
     if perRowActive then
         -- Two-row layout with a per-row icon size offset. Each row is laid out at
         -- its own icon size, centered along the growth axis; the perpendicular
@@ -4278,7 +4305,14 @@ LayoutCDMBar = function(barKey)
                 local rowMainPx = rowN * wPx + math.max(0, rowN - 1) * spacingPx
                 local offMainPx = math.floor((totalWPx - rowMainPx) / 2 + 0.5)
                 local xPx = offMainPx + idxInRow * (wPx + spacingPx)
-                local yPx = (rowIdx == 1) and 0 or (rowHPx[1] + spacingPx)
+                -- Perpendicular offset of each row band. Reversed when the
+                -- last row is pinned: rowIdx 2 sits at the top, rowIdx 1 below.
+                local yPx
+                if lastRowPinned then
+                    yPx = (rowIdx == 2) and 0 or (rowHPx[2] + spacingPx)
+                else
+                    yPx = (rowIdx == 1) and 0 or (rowHPx[1] + spacingPx)
+                end
                 anchorX = (xPx * onePx) * iS
                 anchorY = -(yPx * onePx) * iS
             else
@@ -4287,7 +4321,14 @@ LayoutCDMBar = function(barKey)
                 local rowMainPx = rowN * hPx + math.max(0, rowN - 1) * spacingPx
                 local offMainPx = math.floor((totalHPx - rowMainPx) / 2 + 0.5)
                 local yPx = offMainPx + idxInRow * (hPx + spacingPx)
-                local xPx = (rowIdx == 1) and 0 or (rowWPx[1] + spacingPx)
+                -- Perpendicular offset of each column band. Reversed when the
+                -- last row is pinned: rowIdx 2 sits at the left, rowIdx 1 right.
+                local xPx
+                if lastRowPinned then
+                    xPx = (rowIdx == 2) and 0 or (rowWPx[2] + spacingPx)
+                else
+                    xPx = (rowIdx == 1) and 0 or (rowWPx[1] + spacingPx)
+                end
                 anchorX = (xPx * onePx) * iS
                 anchorY = -(yPx * onePx) * iS
             end
@@ -4358,6 +4399,10 @@ LayoutCDMBar = function(barKey)
             col = bottomIdx % stride
             row = 1 + math.floor(bottomIdx / stride)
         end
+        -- Visual row: identical to the data row unless the last-row pin
+        -- reverses the visual order (data row effRows-1 renders on top).
+        -- Data-row logic below (RowIconCount, expansion flags) keeps `row`.
+        local vRow = lastRowPinned and (effRows - 1 - row) or row
 
         -- Apply +1 physical pixel to expanded icons. For horizontal bars,
         -- the expansion is on the WIDTH axis (iconW). For vertical bars
@@ -4382,8 +4427,18 @@ LayoutCDMBar = function(barKey)
         -- icons by 1 physical pixel along the same axis.
         --   extraBefore  = along the growth axis (col index)
         --   extraBeforeR = along the perpendicular axis (row index)
+        -- extraBeforeR counts expanded rows VISUALLY before this one.
+        -- Expanded rows are data rows < growthH; in normal order those are
+        -- exactly the min(row, growthH) rows above. In reversed order the
+        -- rows visually above are the data rows in (row, effRows-1], of
+        -- which max(0, min(growthH, effRows) - row - 1) are expanded.
         local extraBefore  = math.min(col, growthW) * onePx
-        local extraBeforeR = math.min(row, growthH) * onePx
+        local extraBeforeR
+        if lastRowPinned then
+            extraBeforeR = math.max(0, math.min(growthH, effRows) - row - 1) * onePx
+        else
+            extraBeforeR = math.min(row, growthH) * onePx
+        end
 
         if isMouseBar then
             icon:SetFrameStrata("TOOLTIP")
@@ -4402,7 +4457,7 @@ LayoutCDMBar = function(barKey)
         -- by iconScale for SetPoint. No per-position snapping -- dividing
         -- integers by the same constant produces mathematically uniform gaps.
         local posX = col * stepW + extraBefore
-        local posY = row * stepH
+        local posY = vRow * stepH
 
         -- Resolve anchor params first, then update fd._cdmAnchor BEFORE
         -- the SetPoint call. The SetPoint hook fires AFTER SetPoint and
@@ -4429,7 +4484,7 @@ LayoutCDMBar = function(barKey)
                 rowOffset = math.floor((stride - rowCount) * stepH / 2 + 0.5)
             end
             anchorPt, anchorRelPt = "TOPLEFT", "TOPLEFT"
-            anchorX = (row * stepW + extraBeforeR) * iS
+            anchorX = (vRow * stepW + extraBeforeR) * iS
             anchorY = -(col * stepH + extraBefore + rowOffset) * iS
         end
 
